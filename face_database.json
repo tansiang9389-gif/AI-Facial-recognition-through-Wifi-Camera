@@ -1,0 +1,11 @@
+{
+  "persons": {
+    "P0001": {
+      "name": "Jun",
+      "image": "Jun.JPG",
+      "first_seen": "2026-02-11 00:31:03",
+      "last_seen": "2026-02-11 06:44:47"
+    }
+  },
+  "next_id": 2
+}
