@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coconut Detection Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #16213e, #0f3460);
+            padding: 20px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+        .header h1 {
+            font-size: 1.5em;
+            color: #4ecca3;
+        }
+        .header .stats {
+            display: flex;
+            gap: 20px;
+        }
+        .stat-box {
+            background: rgba(255,255,255,0.1);
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-box .value {
+            font-size: 1.4em;
+            font-weight: bold;
+            color: #4ecca3;
+        }
+        .stat-box .label {
+            font-size: 0.75em;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+        .main {
+            padding: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+        }
+        .camera-card {
+            background: #16213e;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        .camera-card .card-header {
+            padding: 12px 16px;
+            background: rgba(0,0,0,0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .camera-card .card-header h3 {
+            color: #4ecca3;
+            font-size: 1em;
+        }
+        .camera-card .status {
+            font-size: 0.8em;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: #e94560;
+        }
+        .camera-card .status.live {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+        .camera-card img {
+            width: 100%;
+            display: block;
+            min-height: 300px;
+            background: #0f0f23;
+        }
+        .detection-panel {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        .detection-panel h3 {
+            color: #4ecca3;
+            margin-bottom: 12px;
+        }
+        .detection-entry {
+            background: rgba(255,255,255,0.05);
+            padding: 10px 14px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .detection-entry .cam-name {
+            color: #4ecca3;
+            font-weight: bold;
+        }
+        .detection-entry .count {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #e94560;
+        }
+        .detection-entry .time {
+            color: #888;
+            font-size: 0.85em;
+        }
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #555;
+            font-size: 0.85em;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Coconut Detection System</h1>
+        <div class="stats">
+            <div class="stat-box">
+                <div class="value" id="total-detections">0</div>
+                <div class="label">Total Detections</div>
+            </div>
+            <div class="stat-box">
+                <div class="value" id="cameras-online">0/0</div>
+                <div class="label">Cameras Online</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="main">
+        {% for cam in cameras %}
+        <div class="camera-card">
+            <div class="card-header">
+                <h3>{{ cam.label }}</h3>
+                <span class="status" id="status-{{ cam.id }}">Connecting...</span>
+            </div>
+            <img src="/video_feed/{{ cam.id }}" alt="{{ cam.label }}">
+        </div>
+        {% endfor %}
+
+        <div class="detection-panel">
+            <h3>Recent Detections</h3>
+            <div id="detection-list">
+                <div class="detection-entry">
+                    <span class="cam-name">Waiting for detections...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Coconut Detection System | YOLOv8 | WiFi Camera
+    </div>
+
+    <script>
+        function updateStats() {
+            fetch('/api/stats')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('total-detections').textContent = data.total_detections || 0;
+                    document.getElementById('cameras-online').textContent =
+                        (data.cameras_connected || 0) + '/' + (data.cameras_total || 0);
+                })
+                .catch(() => {});
+        }
+
+        function updateDetections() {
+            fetch('/api/detections')
+                .then(r => r.json())
+                .then(data => {
+                    const list = document.getElementById('detection-list');
+                    if (Object.keys(data).length === 0) return;
+
+                    let html = '';
+                    for (const [camId, info] of Object.entries(data)) {
+                        html += `
+                            <div class="detection-entry">
+                                <div>
+                                    <span class="cam-name">${info.camera}</span>
+                                    <span class="time">${info.last_seen}</span>
+                                </div>
+                                <span class="count">${info.count} coconut(s)</span>
+                            </div>
+                        `;
+                    }
+                    list.innerHTML = html;
+
+                    // Update camera statuses
+                    for (const [camId, info] of Object.entries(data)) {
+                        const statusEl = document.getElementById('status-' + camId);
+                        if (statusEl) {
+                            statusEl.textContent = 'LIVE';
+                            statusEl.classList.add('live');
+                        }
+                    }
+                })
+                .catch(() => {});
+        }
+
+        setInterval(updateStats, 2000);
+        setInterval(updateDetections, 2000);
+        updateStats();
+        updateDetections();
+    </script>
+</body>
+</html>
