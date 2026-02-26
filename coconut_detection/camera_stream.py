@@ -1,12 +1,11 @@
 """
-Threaded RTSP Camera Stream Reader
-Each camera runs in its own thread to prevent blocking.
-Shared module — identical to the facial recognition camera stream.
+Threaded RTSP/WiFi camera reader with auto-reconnection.
+Each camera runs in its own daemon thread, providing thread-safe frame access.
 """
 
-import cv2
 import threading
 import time
+import cv2
 
 
 class CameraStream:
@@ -18,7 +17,6 @@ class CameraStream:
         self.lock = threading.Lock()
         self.running = False
         self.connected = False
-        self._thread = None
 
     def start(self):
         self.running = True
@@ -36,13 +34,13 @@ class CameraStream:
         while self.running:
             cap = cv2.VideoCapture(self.url)
             if not cap.isOpened():
-                print(f"[{self.cam_id}] Cannot connect to {self.label}. Retrying in 5s...")
+                print(f"[{self.label}] Cannot connect to {self.url}, retrying in 5s...")
                 self.connected = False
                 time.sleep(5)
                 continue
 
-            print(f"[{self.cam_id}] Connected to {self.label}")
             self.connected = True
+            print(f"[{self.label}] Connected to {self.url}")
             fail_count = 0
 
             while self.running:
@@ -50,9 +48,9 @@ class CameraStream:
                 if not ret:
                     fail_count += 1
                     if fail_count > 30:
-                        print(f"[{self.cam_id}] Lost connection. Reconnecting...")
+                        print(f"[{self.label}] Too many read failures, reconnecting...")
                         break
-                    time.sleep(0.05)
+                    time.sleep(0.01)
                     continue
 
                 fail_count = 0
@@ -62,4 +60,5 @@ class CameraStream:
             cap.release()
             self.connected = False
             if self.running:
-                time.sleep(2)
+                print(f"[{self.label}] Disconnected, reconnecting in 5s...")
+                time.sleep(5)

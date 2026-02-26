@@ -3,215 +3,595 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Coconut Detection Dashboard</title>
+    <title>Coconut Maturity Classification Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0f0f1a;
+            color: #e0e0e0;
             min-height: 100vh;
         }
+
+        /* Header */
         .header {
-            background: linear-gradient(135deg, #16213e, #0f3460);
-            padding: 20px 30px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-bottom: 2px solid #4ecca3;
+            padding: 16px 24px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            flex-wrap: wrap;
+            gap: 12px;
         }
         .header h1 {
-            font-size: 1.5em;
+            font-size: 1.4rem;
             color: #4ecca3;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
-        .header .stats {
+        .header h1 span { font-size: 1.6rem; }
+        .header-stats {
             display: flex;
             gap: 20px;
+            flex-wrap: wrap;
         }
         .stat-box {
-            background: rgba(255,255,255,0.1);
-            padding: 8px 16px;
+            background: rgba(78, 204, 163, 0.1);
+            border: 1px solid rgba(78, 204, 163, 0.3);
             border-radius: 8px;
+            padding: 8px 16px;
             text-align: center;
+            min-width: 90px;
         }
-        .stat-box .value {
-            font-size: 1.4em;
-            font-weight: bold;
+        .stat-box .label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
+        .stat-box .value { font-size: 1.3rem; font-weight: 700; }
+        .stat-premature .value { color: #4ecca3; }
+        .stat-mature .value { color: #ff9f43; }
+        .stat-potential .value { color: #ffd32a; }
+        .stat-total .value { color: #fff; }
+        .stat-cameras .value { color: #54a0ff; }
+        .mode-badge {
+            font-size: 0.7rem;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: rgba(78,204,163,0.2);
             color: #4ecca3;
+            font-weight: 600;
         }
-        .stat-box .label {
-            font-size: 0.75em;
-            color: #aaa;
-            text-transform: uppercase;
+
+        /* Main content */
+        .container { padding: 20px; }
+
+        /* Tab navigation */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #222;
         }
-        .main {
-            padding: 20px;
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: #888;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { color: #ccc; }
+        .tab-btn.active { color: #4ecca3; border-bottom-color: #4ecca3; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Camera grid */
+        .camera-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
             gap: 20px;
         }
         .camera-card {
-            background: #16213e;
+            background: #1a1a2e;
             border-radius: 12px;
             overflow: hidden;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            border: 1px solid #2a2a4a;
         }
-        .camera-card .card-header {
-            padding: 12px 16px;
-            background: rgba(0,0,0,0.2);
+        .camera-card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            padding: 10px 16px;
+            background: #16213e;
         }
-        .camera-card .card-header h3 {
-            color: #4ecca3;
-            font-size: 1em;
-        }
-        .camera-card .status {
-            font-size: 0.8em;
-            padding: 4px 10px;
+        .camera-card-header h3 { font-size: 0.95rem; color: #ddd; }
+        .status-badge {
+            font-size: 0.7rem;
+            padding: 3px 10px;
             border-radius: 12px;
-            background: #e94560;
+            font-weight: 600;
         }
-        .camera-card .status.live {
-            background: #4ecca3;
-            color: #1a1a2e;
-        }
+        .status-live { background: #27ae60; color: #fff; }
+        .status-offline { background: #e74c3c; color: #fff; }
         .camera-card img {
             width: 100%;
             display: block;
-            min-height: 300px;
-            background: #0f0f23;
+            aspect-ratio: 4/3;
+            object-fit: cover;
+            background: #000;
         }
-        .detection-panel {
-            background: #16213e;
+        .camera-card-footer {
+            padding: 10px 16px;
+            display: flex;
+            gap: 16px;
+            font-size: 0.85rem;
+        }
+        .cam-count { display: flex; align-items: center; gap: 4px; }
+        .cam-count .dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .dot-premature { background: #4ecca3; }
+        .dot-mature { background: #ff9f43; }
+        .dot-potential { background: #ffd32a; }
+
+        /* Charts section */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .chart-card {
+            background: #1a1a2e;
             border-radius: 12px;
             padding: 20px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            border: 1px solid #2a2a4a;
         }
-        .detection-panel h3 {
-            color: #4ecca3;
-            margin-bottom: 12px;
+        .chart-card h3 { font-size: 1rem; color: #4ecca3; margin-bottom: 16px; }
+        .chart-container { position: relative; width: 100%; max-height: 350px; }
+
+        /* Detections panel */
+        .detections-panel {
+            background: #1a1a2e;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #2a2a4a;
+            max-height: 500px;
+            overflow-y: auto;
         }
-        .detection-entry {
-            background: rgba(255,255,255,0.05);
-            padding: 10px 14px;
-            border-radius: 8px;
-            margin-bottom: 8px;
+        .detections-panel h3 { color: #4ecca3; margin-bottom: 12px; }
+        .det-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #222;
+            font-size: 0.85rem;
         }
-        .detection-entry .cam-name {
-            color: #4ecca3;
-            font-weight: bold;
+        .det-item:last-child { border-bottom: none; }
+        .det-camera { color: #54a0ff; font-weight: 600; min-width: 80px; }
+        .det-time { color: #888; min-width: 70px; }
+        .det-counts { display: flex; gap: 10px; }
+        .det-tag {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
         }
-        .detection-entry .count {
-            font-size: 1.2em;
-            font-weight: bold;
-            color: #e94560;
+        .det-tag-premature { background: rgba(78,204,163,0.2); color: #4ecca3; }
+        .det-tag-mature { background: rgba(255,159,67,0.2); color: #ff9f43; }
+        .det-tag-potential { background: rgba(255,211,42,0.2); color: #ffd32a; }
+
+        /* Report section */
+        .report-section { max-width: 800px; }
+        .report-btn {
+            background: #4ecca3;
+            color: #1a1a2e;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin-bottom: 16px;
         }
-        .detection-entry .time {
-            color: #888;
-            font-size: 0.85em;
+        .report-btn:hover { background: #3dbb94; }
+        .report-output {
+            background: #111;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            color: #ccc;
+            min-height: 100px;
         }
-        .footer {
-            text-align: center;
-            padding: 20px;
-            color: #555;
-            font-size: 0.85em;
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #111; }
+        ::-webkit-scrollbar-thumb { background: #4ecca3; border-radius: 3px; }
+
+        @media (max-width: 600px) {
+            .camera-grid { grid-template-columns: 1fr; }
+            .charts-grid { grid-template-columns: 1fr; }
+            .header { flex-direction: column; align-items: flex-start; }
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>Coconut Detection System</h1>
-        <div class="stats">
-            <div class="stat-box">
-                <div class="value" id="total-detections">0</div>
-                <div class="label">Total Detections</div>
-            </div>
-            <div class="stat-box">
-                <div class="value" id="cameras-online">0/0</div>
-                <div class="label">Cameras Online</div>
-            </div>
+
+<!-- Header -->
+<div class="header">
+    <div style="display:flex; align-items:center; gap:12px;">
+        <h1><span>&#127812;</span> Coconut Maturity Classification</h1>
+        <span class="mode-badge">{{ inference_mode }}</span>
+    </div>
+    <div class="header-stats">
+        <div class="stat-box stat-premature">
+            <div class="label">Premature</div>
+            <div class="value" id="total-premature">0</div>
+        </div>
+        <div class="stat-box stat-mature">
+            <div class="label">Mature</div>
+            <div class="value" id="total-mature">0</div>
+        </div>
+        <div class="stat-box stat-potential">
+            <div class="label">Potential</div>
+            <div class="value" id="total-potential">0</div>
+        </div>
+        <div class="stat-box stat-total">
+            <div class="label">Total</div>
+            <div class="value" id="total-all">0</div>
+        </div>
+        <div class="stat-box stat-cameras">
+            <div class="label">Cameras</div>
+            <div class="value" id="cameras-online">0/0</div>
         </div>
     </div>
+</div>
 
-    <div class="main">
-        {% for cam in cameras %}
-        <div class="camera-card">
-            <div class="card-header">
-                <h3>{{ cam.label }}</h3>
-                <span class="status" id="status-{{ cam.id }}">Connecting...</span>
-            </div>
-            <img src="/video_feed/{{ cam.id }}" alt="{{ cam.label }}">
-        </div>
-        {% endfor %}
+<!-- Container -->
+<div class="container">
 
-        <div class="detection-panel">
-            <h3>Recent Detections</h3>
-            <div id="detection-list">
-                <div class="detection-entry">
-                    <span class="cam-name">Waiting for detections...</span>
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab-btn active" data-tab="live">Live Cameras</button>
+        <button class="tab-btn" data-tab="charts">Maturity Charts</button>
+        <button class="tab-btn" data-tab="trends">Historical Trends</button>
+        <button class="tab-btn" data-tab="detections">Detections</button>
+        <button class="tab-btn" data-tab="report">Reports</button>
+    </div>
+
+    <!-- Tab: Live Cameras -->
+    <div class="tab-content active" id="tab-live">
+        <div class="camera-grid">
+            {% for cam in cameras %}
+            <div class="camera-card" id="card-{{ cam.id }}">
+                <div class="camera-card-header">
+                    <h3>{{ cam.label }}</h3>
+                    <span class="status-badge status-offline" id="status-{{ cam.id }}">CONNECTING</span>
+                </div>
+                <img src="/video_feed/{{ cam.id }}" alt="{{ cam.label }}">
+                <div class="camera-card-footer">
+                    <div class="cam-count"><span class="dot dot-premature"></span> Premature: <span id="cnt-premature-{{ cam.id }}">0</span></div>
+                    <div class="cam-count"><span class="dot dot-mature"></span> Mature: <span id="cnt-mature-{{ cam.id }}">0</span></div>
+                    <div class="cam-count"><span class="dot dot-potential"></span> Potential: <span id="cnt-potential-{{ cam.id }}">0</span></div>
                 </div>
             </div>
+            {% endfor %}
         </div>
     </div>
 
-    <div class="footer">
-        Coconut Detection System | YOLOv8 | WiFi Camera
+    <!-- Tab: Maturity Charts -->
+    <div class="tab-content" id="tab-charts">
+        <div class="charts-grid" id="charts-container">
+            <div class="chart-card">
+                <h3>Overall Maturity Distribution</h3>
+                <div class="chart-container">
+                    <canvas id="chart-overall"></canvas>
+                </div>
+            </div>
+            {% for cam in cameras %}
+            <div class="chart-card">
+                <h3>{{ cam.label }} - Distribution</h3>
+                <div class="chart-container">
+                    <canvas id="chart-{{ cam.id }}"></canvas>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
     </div>
 
-    <script>
-        function updateStats() {
-            fetch('/api/stats')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('total-detections').textContent = data.total_detections || 0;
-                    document.getElementById('cameras-online').textContent =
-                        (data.cameras_connected || 0) + '/' + (data.cameras_total || 0);
-                })
-                .catch(() => {});
+    <!-- Tab: Historical Trends -->
+    <div class="tab-content" id="tab-trends">
+        <div class="charts-grid">
+            <div class="chart-card" style="grid-column: 1 / -1;">
+                <h3>Maturity Progression (Last 14 Days)</h3>
+                <div class="chart-container" style="max-height:450px;">
+                    <canvas id="chart-trend"></canvas>
+                </div>
+            </div>
+            {% for cam in cameras %}
+            <div class="chart-card">
+                <h3>{{ cam.label }} - Daily Trend</h3>
+                <div class="chart-container">
+                    <canvas id="chart-trend-{{ cam.id }}"></canvas>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Tab: Detections -->
+    <div class="tab-content" id="tab-detections">
+        <div class="detections-panel">
+            <h3>Recent Detections</h3>
+            <div id="detections-list">
+                <div class="det-item" style="color:#666;">Waiting for detections...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Reports -->
+    <div class="tab-content" id="tab-report">
+        <div class="report-section">
+            <h3 style="color:#4ecca3; margin-bottom:12px;">Daily Maturity Report</h3>
+            <button class="report-btn" id="btn-generate-report">Generate Report Now</button>
+            <div class="report-output" id="report-output">Click "Generate Report Now" to create a maturity distribution report.</div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // ── Tab switching ──
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+        });
+    });
+
+    // ── Camera IDs from Jinja ──
+    const cameraIds = [{% for cam in cameras %}"{{ cam.id }}"{% if not loop.last %}, {% endif %}{% endfor %}];
+    const cameraLabels = { {% for cam in cameras %}"{{ cam.id }}": "{{ cam.label }}"{% if not loop.last %}, {% endif %}{% endfor %} };
+
+    // ── Chart.js ──
+    const COLORS = { premature: '#4ecca3', mature: '#ff9f43', potential: '#ffd32a' };
+    const pieCharts = {};
+    const trendCharts = {};
+
+    // Overall doughnut
+    pieCharts['overall'] = new Chart(document.getElementById('chart-overall'), {
+        type: 'doughnut',
+        data: {
+            labels: ['Premature', 'Mature', 'Potential'],
+            datasets: [{ data: [0, 0, 0], backgroundColor: [COLORS.premature, COLORS.mature, COLORS.potential], borderWidth: 0 }]
+        },
+        options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { color: '#ccc' } } } }
+    });
+
+    // Per-camera doughnuts
+    cameraIds.forEach(id => {
+        const el = document.getElementById('chart-' + id);
+        if (el) {
+            pieCharts[id] = new Chart(el, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Premature', 'Mature', 'Potential'],
+                    datasets: [{ data: [0, 0, 0], backgroundColor: [COLORS.premature, COLORS.mature, COLORS.potential], borderWidth: 0 }]
+                },
+                options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { color: '#ccc' } } } }
+            });
         }
+    });
 
-        function updateDetections() {
-            fetch('/api/detections')
-                .then(r => r.json())
-                .then(data => {
-                    const list = document.getElementById('detection-list');
-                    if (Object.keys(data).length === 0) return;
-
-                    let html = '';
-                    for (const [camId, info] of Object.entries(data)) {
-                        html += `
-                            <div class="detection-entry">
-                                <div>
-                                    <span class="cam-name">${info.camera}</span>
-                                    <span class="time">${info.last_seen}</span>
-                                </div>
-                                <span class="count">${info.count} coconut(s)</span>
-                            </div>
-                        `;
-                    }
-                    list.innerHTML = html;
-
-                    // Update camera statuses
-                    for (const [camId, info] of Object.entries(data)) {
-                        const statusEl = document.getElementById('status-' + camId);
-                        if (statusEl) {
-                            statusEl.textContent = 'LIVE';
-                            statusEl.classList.add('live');
-                        }
-                    }
-                })
-                .catch(() => {});
+    // Overall trend line chart
+    trendCharts['overall'] = new Chart(document.getElementById('chart-trend'), {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                { label: 'Premature', data: [], borderColor: COLORS.premature, backgroundColor: 'rgba(78,204,163,0.1)', fill: true, tension: 0.3 },
+                { label: 'Mature', data: [], borderColor: COLORS.mature, backgroundColor: 'rgba(255,159,67,0.1)', fill: true, tension: 0.3 },
+                { label: 'Potential', data: [], borderColor: COLORS.potential, backgroundColor: 'rgba(255,211,42,0.1)', fill: true, tension: 0.3 },
+            ]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                x: { ticks: { color: '#888' }, grid: { color: '#222' } },
+                y: { ticks: { color: '#888' }, grid: { color: '#222' }, beginAtZero: true }
+            },
+            plugins: { legend: { labels: { color: '#ccc' } } }
         }
+    });
 
-        setInterval(updateStats, 2000);
-        setInterval(updateDetections, 2000);
-        updateStats();
-        updateDetections();
-    </script>
+    // Per-camera trend charts
+    cameraIds.forEach(id => {
+        const el = document.getElementById('chart-trend-' + id);
+        if (el) {
+            trendCharts[id] = new Chart(el, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: 'Premature', data: [], borderColor: COLORS.premature, tension: 0.3 },
+                        { label: 'Mature', data: [], borderColor: COLORS.mature, tension: 0.3 },
+                        { label: 'Potential', data: [], borderColor: COLORS.potential, tension: 0.3 },
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: { ticks: { color: '#888' }, grid: { color: '#222' } },
+                        y: { ticks: { color: '#888' }, grid: { color: '#222' }, beginAtZero: true }
+                    },
+                    plugins: { legend: { labels: { color: '#ccc' } } }
+                }
+            });
+        }
+    });
+
+    // ── API Polling ──
+
+    async function updateStats() {
+        try {
+            const res = await fetch('/api/stats');
+            const data = await res.json();
+            const t = data.totals;
+            document.getElementById('total-premature').textContent = t.premature;
+            document.getElementById('total-mature').textContent = t.mature;
+            document.getElementById('total-potential').textContent = t.potential;
+            document.getElementById('total-all').textContent = t.total;
+            document.getElementById('cameras-online').textContent = t.cameras_online + '/' + t.cameras_total;
+
+            for (const [camId, s] of Object.entries(data.cameras)) {
+                const statusEl = document.getElementById('status-' + camId);
+                if (statusEl) {
+                    statusEl.textContent = s.connected ? 'LIVE' : 'OFFLINE';
+                    statusEl.className = 'status-badge ' + (s.connected ? 'status-live' : 'status-offline');
+                }
+                const pEl = document.getElementById('cnt-premature-' + camId);
+                if (pEl) pEl.textContent = s.premature;
+                const mEl = document.getElementById('cnt-mature-' + camId);
+                if (mEl) mEl.textContent = s.mature;
+                const ptEl = document.getElementById('cnt-potential-' + camId);
+                if (ptEl) ptEl.textContent = s.potential;
+            }
+        } catch (e) { /* retry */ }
+    }
+
+    async function updateDistributions() {
+        try {
+            const res = await fetch('/api/distributions/today');
+            const data = await res.json();
+
+            let totalPre = 0, totalMat = 0, totalPot = 0;
+            for (const [cam, counts] of Object.entries(data)) {
+                const pre = counts.Premature || 0;
+                const mat = counts.Mature || 0;
+                const pot = counts.Potential || 0;
+                totalPre += pre; totalMat += mat; totalPot += pot;
+
+                for (const id of cameraIds) {
+                    if (cameraLabels[id] === cam && pieCharts[id]) {
+                        pieCharts[id].data.datasets[0].data = [pre, mat, pot];
+                        pieCharts[id].update('none');
+                    }
+                }
+            }
+            if (pieCharts['overall']) {
+                pieCharts['overall'].data.datasets[0].data = [totalPre, totalMat, totalPot];
+                pieCharts['overall'].update('none');
+            }
+        } catch (e) { /* retry */ }
+    }
+
+    async function updateTrends() {
+        try {
+            const res = await fetch('/api/trends');
+            const data = await res.json();
+            const dates = Object.keys(data).sort();
+
+            const aggPre = [], aggMat = [], aggPot = [];
+            const perCam = {};
+            cameraIds.forEach(id => { perCam[cameraLabels[id]] = { pre: [], mat: [], pot: [] }; });
+
+            for (const date of dates) {
+                let dp = 0, dm = 0, dpt = 0;
+                for (const [cam, counts] of Object.entries(data[date])) {
+                    const pre = counts.Premature || 0;
+                    const mat = counts.Mature || 0;
+                    const pot = counts.Potential || 0;
+                    dp += pre; dm += mat; dpt += pot;
+                    if (perCam[cam]) {
+                        perCam[cam].pre.push(pre);
+                        perCam[cam].mat.push(mat);
+                        perCam[cam].pot.push(pot);
+                    }
+                }
+                aggPre.push(dp); aggMat.push(dm); aggPot.push(dpt);
+
+                for (const cam of Object.keys(perCam)) {
+                    if (!(cam in (data[date] || {}))) {
+                        perCam[cam].pre.push(0);
+                        perCam[cam].mat.push(0);
+                        perCam[cam].pot.push(0);
+                    }
+                }
+            }
+
+            const tc = trendCharts['overall'];
+            tc.data.labels = dates;
+            tc.data.datasets[0].data = aggPre;
+            tc.data.datasets[1].data = aggMat;
+            tc.data.datasets[2].data = aggPot;
+            tc.update('none');
+
+            cameraIds.forEach(id => {
+                const label = cameraLabels[id];
+                if (trendCharts[id] && perCam[label]) {
+                    trendCharts[id].data.labels = dates;
+                    trendCharts[id].data.datasets[0].data = perCam[label].pre;
+                    trendCharts[id].data.datasets[1].data = perCam[label].mat;
+                    trendCharts[id].data.datasets[2].data = perCam[label].pot;
+                    trendCharts[id].update('none');
+                }
+            });
+        } catch (e) { /* retry */ }
+    }
+
+    async function updateDetections() {
+        try {
+            const res = await fetch('/api/detections');
+            const data = await res.json();
+            const container = document.getElementById('detections-list');
+            if (!data.length) return;
+
+            let html = '';
+            for (const det of data.reverse()) {
+                html += `
+                    <div class="det-item">
+                        <span class="det-camera">${det.camera}</span>
+                        <span class="det-time">${det.time}</span>
+                        <div class="det-counts">
+                            ${det.premature ? `<span class="det-tag det-tag-premature">Pre: ${det.premature}</span>` : ''}
+                            ${det.mature ? `<span class="det-tag det-tag-mature">Mat: ${det.mature}</span>` : ''}
+                            ${det.potential ? `<span class="det-tag det-tag-potential">Pot: ${det.potential}</span>` : ''}
+                        </div>
+                        <span style="color:#888;">${det.confidence}%</span>
+                    </div>`;
+            }
+            container.innerHTML = html;
+        } catch (e) { /* retry */ }
+    }
+
+    // Generate report
+    document.getElementById('btn-generate-report').addEventListener('click', async () => {
+        const out = document.getElementById('report-output');
+        out.textContent = 'Generating report...';
+        try {
+            const res = await fetch('/api/report/generate');
+            const data = await res.json();
+            out.textContent = data.report || 'No data available for report.';
+        } catch (e) { out.textContent = 'Error generating report.'; }
+    });
+
+    // ── Start polling ──
+    setInterval(updateStats, 2000);
+    setInterval(updateDistributions, 5000);
+    setInterval(updateTrends, 30000);
+    setInterval(updateDetections, 3000);
+    updateStats(); updateDistributions(); updateTrends(); updateDetections();
+</script>
+
 </body>
 </html>
