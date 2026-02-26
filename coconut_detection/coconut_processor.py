@@ -1,49 +1,51 @@
 """
-Coconut Processing Thread
-Alternates between cameras, runs YOLOv8 coconut detection.
-Annotates frames with bounding boxes and coconut count.
+Coconut Maturity Processor - Main processing orchestrator.
+Runs in its own thread, round-robins cameras, performs maturity
+classification (via Roboflow API or local YOLOv8), annotates frames
+with color-coded bounding boxes, and coordinates logging/alerts/tracking.
 """
+
+import time
+import threading
+from datetime import datetime
 
 import cv2
 import numpy as np
-import threading
-import time
-from datetime import datetime
 
-from coconut_detector import (
-    CoconutDetector, DetectionSaver,
-    send_alert_async, log_detection, init_log,
+from config import (
+    CLASS_COLORS, CLASS_LABELS, CLASS_NAMES,
+    PROCESS_EVERY_N_FRAMES, RESIZE_WIDTH,
 )
-from config import PROCESS_EVERY_N_FRAMES, RESIZE_WIDTH
-
-
-# ─── Color palette for drawing ───────────────────────────────────────────────
-COCONUT_COLOR = (0, 200, 0)        # Green for detected coconuts
-HUD_COLOR = (255, 255, 255)        # White for HUD text
-COUNT_COLOR = (0, 255, 255)        # Yellow for coconut count
+from coconut_detector import create_detector, DetectionSaver, init_log, log_detection
+from maturity_tracker import MaturityTracker
 
 
 class CoconutProcessor:
+    """Processes camera frames for coconut maturity classification."""
+
     def __init__(self, cameras):
-        """cameras: dict of {cam_id: CameraStream}"""
         self.cameras = cameras
-
-        print("  Loading YOLOv8 coconut detection model...")
-        self.detector = CoconutDetector()
+        self.detector = create_detector()
         self.saver = DetectionSaver()
-        init_log()
-
-        # Annotated frames for MJPEG streaming (cam_id -> jpeg bytes)
-        self.annotated_frames = {}
-        self.frame_locks = {cam_id: threading.Lock() for cam_id in cameras}
-
-        # Detection stats tracking
-        self.detection_stats = {}   # cam_id -> {count, last_seen, ...}
-        self.stats_lock = threading.Lock()
-        self.total_detections = 0
-
+        self.tracker = MaturityTracker()
         self.running = False
-        self._thread = None
+
+        # Per-camera annotated JPEG frames for MJPEG streaming
+        self._frames = {}
+        self._frame_locks = {}
+        for cam_id in cameras:
+            self._frames[cam_id] = None
+            self._frame_locks[cam_id] = threading.Lock()
+
+        # Per-camera latest stats for the API
+        self._stats = {}
+        self._stats_lock = threading.Lock()
+
+        # Recent detections list (for the dashboard)
+        self._recent_detections = []
+        self._recent_lock = threading.Lock()
+
+        init_log()
 
     def start(self):
         self.running = True
@@ -54,25 +56,26 @@ class CoconutProcessor:
         self.running = False
 
     def get_annotated_frame(self, cam_id):
-        lock = self.frame_locks.get(cam_id)
+        """Return the latest annotated JPEG bytes for a camera."""
+        lock = self._frame_locks.get(cam_id)
         if not lock:
             return None
         with lock:
-            return self.annotated_frames.get(cam_id)
+            return self._frames.get(cam_id)
 
     def get_stats(self):
-        with self.stats_lock:
-            now = time.time()
-            return {
-                "total_detections": self.total_detections,
-                "cameras_connected": sum(1 for c in self.cameras.values() if c.connected),
-                "cameras_total": len(self.cameras),
-                "camera_stats": dict(self.detection_stats),
-            }
+        """Return current stats dict for all cameras."""
+        with self._stats_lock:
+            return dict(self._stats)
 
-    def get_detection_history(self):
-        with self.stats_lock:
-            return dict(self.detection_stats)
+    def get_recent_detections(self, limit=20):
+        """Return recent detections list."""
+        with self._recent_lock:
+            return list(self._recent_detections[-limit:])
+
+    def get_tracker(self):
+        """Access the maturity tracker for trend data."""
+        return self.tracker
 
     def _process_loop(self):
         cam_ids = list(self.cameras.keys())
@@ -80,118 +83,174 @@ class CoconutProcessor:
         frame_count = 0
 
         while self.running:
+            if not cam_ids:
+                time.sleep(1)
+                continue
+
             cam_id = cam_ids[cam_idx % len(cam_ids)]
             cam = self.cameras[cam_id]
             cam_idx += 1
-
-            frame = cam.get_frame()
-            if frame is None:
-                # No frame yet — generate a "no signal" placeholder
-                placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(placeholder, f"{cam.label}: No Signal", (120, 240),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-                _, buf = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                with self.frame_locks[cam_id]:
-                    self.annotated_frames[cam_id] = buf.tobytes()
-                time.sleep(0.5)
-                continue
-
             frame_count += 1
 
             # Skip frames for performance
             if frame_count % PROCESS_EVERY_N_FRAMES != 0:
-                # Still encode the frame for streaming (without detection)
-                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                with self.frame_locks[cam_id]:
-                    self.annotated_frames[cam_id] = buf.tobytes()
                 time.sleep(0.01)
                 continue
 
+            frame = cam.get_frame()
+            if frame is None:
+                self._set_no_signal(cam_id, cam.label)
+                time.sleep(0.1)
+                continue
+
+            orig_h, orig_w = frame.shape[:2]
+
             # Resize for inference
-            h, w = frame.shape[:2]
-            if w > RESIZE_WIDTH:
-                scale = RESIZE_WIDTH / w
-                inference_frame = cv2.resize(frame, None, fx=scale, fy=scale)
-            else:
-                inference_frame = frame
-                scale = 1.0
+            scale = RESIZE_WIDTH / orig_w
+            resized = cv2.resize(frame, (RESIZE_WIDTH, int(orig_h * scale)))
 
-            # Run YOLOv8 coconut detection
-            detections = self.detector.detect(inference_frame)
+            # Detect with color validation
+            detections = self.detector.detect_with_color_validation(resized)
 
-            # Scale detections back to original frame size
-            if scale != 1.0:
-                for det in detections:
-                    x1, y1, x2, y2 = det["bbox"]
-                    det["bbox"] = (
-                        int(x1 / scale), int(y1 / scale),
-                        int(x2 / scale), int(y2 / scale),
-                    )
-
-            num_coconuts = len(detections)
-
-            # Periodic status log
-            if frame_count % 50 == 1:
-                print(f"[Processor] {cam_id}: frame #{frame_count}, coconuts: {num_coconuts}")
-
-            # Draw detections on frame
+            # Scale bounding boxes back to original frame size
             for det in detections:
                 x1, y1, x2, y2 = det["bbox"]
-                conf = det["confidence"]
-                label = f"{det['class_name']} {conf:.0%}"
+                det["bbox"] = (x1 / scale, y1 / scale, x2 / scale, y2 / scale)
 
-                # Draw bounding box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), COCONUT_COLOR, 2)
+            # Count per class
+            counts = {cls: 0 for cls in CLASS_NAMES}
+            total_conf = 0
+            for det in detections:
+                cls = det["class_name"]
+                if cls in counts:
+                    counts[cls] += 1
+                total_conf += det["confidence"]
 
-                # Draw label background and text
-                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                cv2.rectangle(frame, (x1, y2), (x1 + tw + 10, y2 + th + 14),
-                              COCONUT_COLOR, cv2.FILLED)
-                cv2.putText(frame, label, (x1 + 5, y2 + th + 7),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            avg_conf = total_conf / len(detections) if detections else 0
+            total = sum(counts.values())
 
-            # Draw coconut count badge
-            count_text = f"Coconuts: {num_coconuts}"
-            cv2.putText(frame, count_text, (10, 70),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, COUNT_COLOR, 2)
+            # Draw annotations on original frame
+            annotated = self._draw_annotations(frame, detections, cam.label, counts)
 
-            # Draw HUD
-            status = "LIVE" if cam.connected else "OFFLINE"
-            hud = f"{cam.label} | {status} | Coconuts: {num_coconuts}"
-            cv2.putText(frame, hud, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, HUD_COLOR, 2)
+            # Encode to JPEG for streaming
+            _, jpeg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            jpeg_bytes = jpeg.tobytes()
+
+            with self._frame_locks[cam_id]:
+                self._frames[cam_id] = jpeg_bytes
 
             # Update stats
-            now = time.time()
-            if num_coconuts > 0:
-                self.total_detections += num_coconuts
-                avg_conf = np.mean([d["confidence"] for d in detections])
+            with self._stats_lock:
+                self._stats[cam_id] = {
+                    "camera": cam.label,
+                    "connected": cam.connected,
+                    "total_coconuts": total,
+                    "premature": counts.get("Premature", 0),
+                    "mature": counts.get("Mature", 0),
+                    "potential": counts.get("Potential", 0),
+                    "avg_confidence": round(avg_conf, 2),
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                }
 
-                with self.stats_lock:
-                    self.detection_stats[cam_id] = {
-                        "camera": cam.label,
-                        "count": num_coconuts,
-                        "avg_confidence": round(float(avg_conf), 2),
-                        "last_seen": datetime.now().strftime("%H:%M:%S"),
-                        "last_seen_ts": now,
-                    }
+            # Record in tracker + log + save screenshot
+            if total > 0:
+                self.tracker.record_detection(cam.label, detections)
+                screenshot_path = self.saver.save_if_ready(annotated, cam.label, counts)
+                log_detection(cam.label, counts, avg_conf, "detected", screenshot_path or "")
 
-                # Log detection
-                log_detection(cam.label, num_coconuts, avg_conf)
+                # Add to recent detections
+                det_entry = {
+                    "camera": cam.label,
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "premature": counts.get("Premature", 0),
+                    "mature": counts.get("Mature", 0),
+                    "potential": counts.get("Potential", 0),
+                    "total": total,
+                    "confidence": round(avg_conf, 2),
+                    "screenshot": screenshot_path or "",
+                }
+                with self._recent_lock:
+                    self._recent_detections.append(det_entry)
+                    if len(self._recent_detections) > 100:
+                        self._recent_detections = self._recent_detections[-100:]
 
-                # Save screenshot
-                save_path = self.saver.save_if_ready(frame, cam_id, num_coconuts)
-                if save_path:
-                    send_alert_async(
-                        f"Coconut detected: {num_coconuts} coconut(s)\n"
-                        f"{cam.label}\n"
-                        f"{datetime.now():%Y-%m-%d %H:%M:%S}",
-                        save_path,
-                    )
+            time.sleep(0.02)
 
-            # Encode to JPEG for MJPEG stream
-            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            with self.frame_locks[cam_id]:
-                self.annotated_frames[cam_id] = buf.tobytes()
+    def _draw_annotations(self, frame, detections, cam_label, counts):
+        """Draw color-coded bounding boxes and HUD overlay on the frame."""
+        annotated = frame.copy()
 
-            # Small sleep to not spin CPU at 100%
-            time.sleep(0.03)
+        for det in detections:
+            x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
+            cls = det["class_name"]
+            conf = det["confidence"]
+            color = CLASS_COLORS.get(cls, (255, 255, 255))
+            label_text = CLASS_LABELS.get(cls, cls)
+
+            # Bounding box
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+
+            # Label background
+            label_str = f"{label_text} {conf:.0%}"
+            if det.get("color_adjusted"):
+                label_str += " *"
+            (tw, th), _ = cv2.getTextSize(label_str, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+            cv2.putText(annotated, label_str, (x1 + 2, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # HUD overlay - top bar
+        h, w = annotated.shape[:2]
+        overlay = annotated.copy()
+        cv2.rectangle(overlay, (0, 0), (w, 60), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.6, annotated, 0.4, 0, annotated)
+
+        # Camera label
+        cv2.putText(annotated, cam_label, (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        # Maturity counts in HUD
+        total = sum(counts.values())
+        x_pos = 10
+        y_pos = 50
+        for cls_name in CLASS_NAMES:
+            cnt = counts.get(cls_name, 0)
+            color = CLASS_COLORS.get(cls_name, (255, 255, 255))
+            label = CLASS_LABELS.get(cls_name, cls_name)
+            text = f"{label}: {cnt}"
+            cv2.putText(annotated, text, (x_pos, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            x_pos += 140
+
+        # Total count badge
+        cv2.putText(annotated, f"Total: {total}", (x_pos, y_pos),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # Timestamp
+        ts = datetime.now().strftime("%H:%M:%S")
+        cv2.putText(annotated, ts, (w - 100, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+        return annotated
+
+    def _set_no_signal(self, cam_id, cam_label):
+        """Generate a 'No Signal' placeholder frame."""
+        placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(placeholder, "NO SIGNAL", (180, 230),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 200), 3)
+        cv2.putText(placeholder, cam_label, (220, 280),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (150, 150, 150), 2)
+
+        _, jpeg = cv2.imencode(".jpg", placeholder)
+        with self._frame_locks[cam_id]:
+            self._frames[cam_id] = jpeg.tobytes()
+
+        with self._stats_lock:
+            self._stats[cam_id] = {
+                "camera": cam_label,
+                "connected": False,
+                "total_coconuts": 0,
+                "premature": 0, "mature": 0, "potential": 0,
+                "avg_confidence": 0,
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+            }
